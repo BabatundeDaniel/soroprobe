@@ -405,6 +405,8 @@ func inGitHubActions() bool {
 
 func newServeCmd(opts *options) *cobra.Command {
 	var addr string
+	var tlsCert string
+	var tlsKey string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -416,6 +418,15 @@ services. The API is read-only, exactly like the CLI.`,
 			if addr != "" {
 				opts.cfg.HTTPAddr = addr
 			}
+			if tlsCert != "" {
+				opts.cfg.HTTPTLSCert = tlsCert
+			}
+			if tlsKey != "" {
+				opts.cfg.HTTPTLSKey = tlsKey
+			}
+			if (opts.cfg.HTTPTLSCert == "") != (opts.cfg.HTTPTLSKey == "") {
+				return fmt.Errorf("TLS certificate and key must be configured together")
+			}
 
 			p, cleanup, err := opts.prober()
 			if err != nil {
@@ -425,15 +436,22 @@ services. The API is read-only, exactly like the CLI.`,
 
 			log := opts.cfg.Logger(os.Stderr)
 			server := api.New(api.Options{
-				Prober: p,
-				Addr:   opts.cfg.HTTPAddr,
-				Logger: log,
+				Prober:             p,
+				Addr:               opts.cfg.HTTPAddr,
+				Logger:             log,
+				RateLimitPerMinute: opts.cfg.HTTPRateLimitPerMinute,
+				RateLimitBurst:     opts.cfg.HTTPRateLimitBurst,
+				TrustForwardedFor:  opts.cfg.HTTPTrustForwardedFor,
+				TLSCert:            opts.cfg.HTTPTLSCert,
+				TLSKey:             opts.cfg.HTTPTLSKey,
 			})
 			return server.ListenAndServe(cmd.Context())
 		},
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", "", "listen address, overriding HTTP_ADDR")
+	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file, overriding HTTP_TLS_CERT")
+	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS key file, overriding HTTP_TLS_KEY")
 	return cmd
 }
 
