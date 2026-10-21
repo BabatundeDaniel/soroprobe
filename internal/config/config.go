@@ -50,21 +50,17 @@ const (
 
 // Environment variable names.
 const (
-	EnvRPCURL                 = "RPC_URL"
-	EnvNetworkPassphrase      = "NETWORK_PASSPHRASE"
-	EnvSourceAccount          = "SOURCE_ACCOUNT"
-	EnvHTTPAddr               = "HTTP_ADDR"
-	EnvHTTPRateLimitPerMinute = "HTTP_RATE_LIMIT_PER_MINUTE"
-	EnvHTTPRateLimitBurst     = "HTTP_RATE_LIMIT_BURST"
-	EnvHTTPTrustForwardedFor  = "HTTP_TRUST_FORWARDED_FOR"
-	EnvHTTPTLSCert            = "HTTP_TLS_CERT"
-	EnvHTTPTLSKey             = "HTTP_TLS_KEY"
-	EnvLogLevel               = "LOG_LEVEL"
-	EnvTimeout                = "RPC_TIMEOUT"
-	EnvWarnLedgers            = "WARN_LEDGERS"
-	EnvCriticalLedgers        = "CRITICAL_LEDGERS"
-	EnvConfigFile             = "SOROPROBE_CONFIG"
-	EnvSoroVaultURL           = "SOROVAULT_URL"
+	EnvRPCURL            = "RPC_URL"
+	EnvNetworkPassphrase = "NETWORK_PASSPHRASE"
+	EnvSourceAccount     = "SOURCE_ACCOUNT"
+	EnvHTTPAddr          = "HTTP_ADDR"
+	EnvCORSOrigins       = "CORS_ORIGINS"
+	EnvLogLevel          = "LOG_LEVEL"
+	EnvTimeout           = "RPC_TIMEOUT"
+	EnvWarnLedgers       = "WARN_LEDGERS"
+	EnvCriticalLedgers   = "CRITICAL_LEDGERS"
+	EnvConfigFile        = "SOROPROBE_CONFIG"
+	EnvSoroVaultURL      = "SOROVAULT_URL"
 )
 
 // Config holds every setting SoroProbe needs.
@@ -77,12 +73,9 @@ type Config struct {
 	// building an invocation to simulate. A secret key is never required.
 	SourceAccount string `json:"source_account"`
 	// HTTPAddr is the listen address for the HTTP API.
-	HTTPAddr               string `json:"http_addr"`
-	HTTPRateLimitPerMinute uint32 `json:"http_rate_limit_per_minute"`
-	HTTPRateLimitBurst     uint32 `json:"http_rate_limit_burst"`
-	HTTPTrustForwardedFor  bool   `json:"http_trust_forwarded_for"`
-	HTTPTLSCert            string `json:"http_tls_cert"`
-	HTTPTLSKey             string `json:"http_tls_key"`
+	HTTPAddr string `json:"http_addr"`
+	// CORSOrigins is the exact-origin allow-list for the HTTP API.
+	CORSOrigins []string `json:"-"`
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string `json:"log_level"`
 	// Timeout bounds a single RPC request.
@@ -212,21 +205,14 @@ func applyEnv(cfg *Config) error {
 	setString(&cfg.NetworkPassphrase, lookup(EnvNetworkPassphrase))
 	setString(&cfg.SourceAccount, lookup(EnvSourceAccount))
 	setString(&cfg.HTTPAddr, lookup(EnvHTTPAddr))
-	if err := setUint32FromEnv(&cfg.HTTPRateLimitPerMinute, EnvHTTPRateLimitPerMinute); err != nil {
-		return err
-	}
-	if err := setUint32FromEnv(&cfg.HTTPRateLimitBurst, EnvHTTPRateLimitBurst); err != nil {
-		return err
-	}
-	if v := lookup(EnvHTTPTrustForwardedFor); v != nil {
-		trusted, err := strconv.ParseBool(*v)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", EnvHTTPTrustForwardedFor, err)
+	if origins := lookup(EnvCORSOrigins); origins != nil {
+		cfg.CORSOrigins = nil
+		for _, origin := range strings.Split(*origins, ",") {
+			if origin = strings.TrimSpace(origin); origin != "" {
+				cfg.CORSOrigins = append(cfg.CORSOrigins, origin)
+			}
 		}
-		cfg.HTTPTrustForwardedFor = trusted
 	}
-	setString(&cfg.HTTPTLSCert, lookup(EnvHTTPTLSCert))
-	setString(&cfg.HTTPTLSKey, lookup(EnvHTTPTLSKey))
 	setString(&cfg.LogLevel, lookup(EnvLogLevel))
 	setString(&cfg.SoroVaultURL, lookup(EnvSoroVaultURL))
 
