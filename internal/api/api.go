@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,20 @@ type Server struct {
 	tlsKey            string
 	limitMu           sync.Mutex
 	clients           map[string]*clientBucket
+
+	// networkPassphrase is the network /readyz expects the RPC endpoint to
+	// serve.
+	networkPassphrase string
+	// readinessTTL bounds how long a /readyz result is reused before the
+	// RPC endpoint is probed again.
+	readinessTTL time.Duration
+	// ready* cache the last readiness result, so a chatty orchestrator does
+	// not multiply RPC traffic. A mutex guards the pair; it is never held
+	// across an RPC call.
+	readyMu  sync.Mutex
+	readyAt  time.Time
+	readyErr error
+	readySet bool
 }
 
 // Options configures a Server.
@@ -57,15 +72,18 @@ type Options struct {
 	CORSOrigins []string
 	// Timeout bounds a single request. Defaults to 60s.
 	Timeout time.Duration
-	// RateLimitPerMinute is the per-client request rate. Defaults to 60.
+	// NetworkPassphrase is the network /readyz expects the RPC endpoint to
+	// serve; a healthy endpoint on another network is reported unready.
+	// Defaults to the testnet passphrase, matching the CLI's defaults.
+	NetworkPassphrase string
+	// ReadinessCacheTTL bounds how long a /readyz result is reused before
+	// the RPC endpoint is probed again. Defaults to 5s.
+	ReadinessCacheTTL  time.Duration
 	RateLimitPerMinute uint32
-	// RateLimitBurst is the initial per-client burst. Defaults to 10.
-	RateLimitBurst uint32
-	// TrustForwardedFor opts into using the first X-Forwarded-For address.
-	TrustForwardedFor bool
-	// TLSCert and TLSKey are paired paths to the server certificate and key.
-	TLSCert string
-	TLSKey  string
+	RateLimitBurst     uint32
+	TrustForwardedFor  bool
+	TLSCert            string
+	TLSKey             string
 }
 
 // New builds a Server with its routes mounted.
@@ -85,11 +103,19 @@ func New(opts Options) *Server {
 	if opts.RateLimitBurst == 0 {
 		opts.RateLimitBurst = config.DefaultRateLimitBurst
 	}
+	if opts.NetworkPassphrase == "" {
+		opts.NetworkPassphrase = config.DefaultNetworkPassphrase
+	}
+	if opts.ReadinessCacheTTL <= 0 {
+		opts.ReadinessCacheTTL = 5 * time.Second
+	}
 
 	s := &Server{
 		prober:            opts.Prober,
 		addr:              opts.Addr,
 		log:               opts.Logger,
+		networkPassphrase: opts.NetworkPassphrase,
+		readinessTTL:      opts.ReadinessCacheTTL,
 		ratePerSecond:     float64(opts.RateLimitPerMinute) / 60,
 		rateBurst:         float64(opts.RateLimitBurst),
 		trustForwardedFor: opts.TrustForwardedFor,
@@ -104,11 +130,14 @@ func New(opts Options) *Server {
 	r.Use(middleware.Timeout(opts.Timeout))
 	r.Use(nosniff)
 	r.Use(s.logRequests)
+	r.Use(s.rateLimit)
 	if len(opts.CORSOrigins) > 0 {
 		r.Use(cors(opts.CORSOrigins))
 	}
 
 	r.Get("/healthz", s.handleLiveness)
+	r.Get("/openapi.json", s.handleOpenAPI)
+	r.Get("/readyz", s.handleReadiness)
 	r.Route("/v1", func(r chi.Router) {
 		// Answers reflect live on-chain state, so they must not be replayed
 		// from a shared or intermediary cache.
@@ -155,7 +184,7 @@ func cors(origins []string) func(http.Handler) http.Handler {
 // without binding a port.
 func (s *Server) Handler() http.Handler { return s.router }
 
-// ListenAndServe runs the server until ctx is cancelled, then shuts it down
+// ListenAndServe runs the server until ctx is canceled, then shuts it down
 // gracefully.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	if (s.tlsCert == "") != (s.tlsKey == "") {
@@ -294,6 +323,14 @@ func (s *Server) evictOldestClient() {
 		}
 	}
 	delete(s.clients, oldestKey)
+}
+
+//go:embed openapi.json
+var openAPISpec []byte
+
+func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(openAPISpec)
 }
 
 // nosniff stops a browser from reinterpreting a response as a type it did not

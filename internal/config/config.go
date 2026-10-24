@@ -46,21 +46,29 @@ const (
 	DefaultWarnLedgers = 120_960
 	// DefaultCriticalLedgers is ~1 day at 5s per ledger.
 	DefaultCriticalLedgers = 17_280
+	// DefaultBaseFee is the network minimum base fee in stroops.
+	DefaultBaseFee = int64(100)
 )
 
 // Environment variable names.
 const (
-	EnvRPCURL            = "RPC_URL"
-	EnvNetworkPassphrase = "NETWORK_PASSPHRASE"
-	EnvSourceAccount     = "SOURCE_ACCOUNT"
-	EnvHTTPAddr          = "HTTP_ADDR"
-	EnvCORSOrigins       = "CORS_ORIGINS"
-	EnvLogLevel          = "LOG_LEVEL"
-	EnvTimeout           = "RPC_TIMEOUT"
-	EnvWarnLedgers       = "WARN_LEDGERS"
-	EnvCriticalLedgers   = "CRITICAL_LEDGERS"
-	EnvConfigFile        = "SOROPROBE_CONFIG"
-	EnvSoroVaultURL      = "SOROVAULT_URL"
+	EnvRPCURL                 = "RPC_URL"
+	EnvNetworkPassphrase      = "NETWORK_PASSPHRASE"
+	EnvSourceAccount          = "SOURCE_ACCOUNT"
+	EnvHTTPAddr               = "HTTP_ADDR"
+	EnvCORSOrigins            = "CORS_ORIGINS"
+	EnvLogLevel               = "LOG_LEVEL"
+	EnvTimeout                = "RPC_TIMEOUT"
+	EnvWarnLedgers            = "WARN_LEDGERS"
+	EnvCriticalLedgers        = "CRITICAL_LEDGERS"
+	EnvConfigFile             = "SOROPROBE_CONFIG"
+	EnvSoroVaultURL           = "SOROVAULT_URL"
+	EnvBaseFee                = "BASE_FEE"
+	EnvHTTPRateLimitPerMinute = "HTTP_RATE_LIMIT_PER_MINUTE"
+	EnvHTTPRateLimitBurst     = "HTTP_RATE_LIMIT_BURST"
+	EnvHTTPTrustForwardedFor  = "HTTP_TRUST_FORWARDED_FOR"
+	EnvHTTPTLSCert            = "HTTP_TLS_CERT"
+	EnvHTTPTLSKey             = "HTTP_TLS_KEY"
 )
 
 // Config holds every setting SoroProbe needs.
@@ -75,7 +83,12 @@ type Config struct {
 	// HTTPAddr is the listen address for the HTTP API.
 	HTTPAddr string `json:"http_addr"`
 	// CORSOrigins is the exact-origin allow-list for the HTTP API.
-	CORSOrigins []string `json:"-"`
+	CORSOrigins            []string `json:"-"`
+	HTTPRateLimitPerMinute uint32   `json:"http_rate_limit_per_minute"`
+	HTTPRateLimitBurst     uint32   `json:"http_rate_limit_burst"`
+	HTTPTrustForwardedFor  bool     `json:"http_trust_forwarded_for"`
+	HTTPTLSCert            string   `json:"http_tls_cert"`
+	HTTPTLSKey             string   `json:"http_tls_key"`
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string `json:"log_level"`
 	// Timeout bounds a single RPC request.
@@ -89,6 +102,8 @@ type Config struct {
 	// SoroVaultURL, when set, is a SoroVault registry whose recorded contract
 	// interfaces type simulate arguments. Empty disables the lookup.
 	SoroVaultURL string `json:"sorovault_url"`
+	// BaseFee is the base inclusion fee per operation in stroops.
+	BaseFee int64 `json:"base_fee"`
 }
 
 // Default returns a Config populated entirely from the package defaults.
@@ -98,12 +113,13 @@ func Default() Config {
 		NetworkPassphrase:      DefaultNetworkPassphrase,
 		SourceAccount:          DefaultSourceAccount,
 		HTTPAddr:               DefaultHTTPAddr,
-		HTTPRateLimitPerMinute: DefaultRateLimitPerMinute,
-		HTTPRateLimitBurst:     DefaultRateLimitBurst,
 		LogLevel:               DefaultLogLevel,
 		Timeout:                DefaultTimeout,
 		WarnLedgers:            DefaultWarnLedgers,
 		CriticalLedgers:        DefaultCriticalLedgers,
+		BaseFee:                DefaultBaseFee,
+		HTTPRateLimitPerMinute: DefaultRateLimitPerMinute,
+		HTTPRateLimitBurst:     DefaultRateLimitBurst,
 	}
 }
 
@@ -114,16 +130,17 @@ type fileConfig struct {
 	NetworkPassphrase      *string `json:"network_passphrase"`
 	SourceAccount          *string `json:"source_account"`
 	HTTPAddr               *string `json:"http_addr"`
-	HTTPRateLimitPerMinute *uint32 `json:"http_rate_limit_per_minute"`
-	HTTPRateLimitBurst     *uint32 `json:"http_rate_limit_burst"`
-	HTTPTrustForwardedFor  *bool   `json:"http_trust_forwarded_for"`
-	HTTPTLSCert            *string `json:"http_tls_cert"`
-	HTTPTLSKey             *string `json:"http_tls_key"`
 	LogLevel               *string `json:"log_level"`
 	Timeout                *string `json:"timeout"`
 	WarnLedgers            *uint32 `json:"warn_ledgers"`
 	CriticalLedgers        *uint32 `json:"critical_ledgers"`
 	SoroVaultURL           *string `json:"sorovault_url"`
+	BaseFee                *int64  `json:"base_fee"`
+	HTTPRateLimitPerMinute *uint32 `json:"http_rate_limit_per_minute"`
+	HTTPRateLimitBurst     *uint32 `json:"http_rate_limit_burst"`
+	HTTPTrustForwardedFor  *bool   `json:"http_trust_forwarded_for"`
+	HTTPTLSCert            *string `json:"http_tls_cert"`
+	HTTPTLSKey             *string `json:"http_tls_key"`
 }
 
 // Load builds a Config from defaults, then the config file at path (if
@@ -154,7 +171,7 @@ func Load(path string) (Config, error) {
 }
 
 func applyFile(cfg *Config, path string, required bool) error {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the config path comes from --config or SOROPROBE_CONFIG; reading it is the feature.
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !required {
 			return nil
@@ -190,6 +207,9 @@ func applyFile(cfg *Config, path string, required bool) error {
 	if fc.CriticalLedgers != nil {
 		cfg.CriticalLedgers = *fc.CriticalLedgers
 	}
+	if fc.BaseFee != nil {
+		cfg.BaseFee = *fc.BaseFee
+	}
 	if fc.Timeout != nil {
 		d, err := time.ParseDuration(*fc.Timeout)
 		if err != nil {
@@ -205,6 +225,21 @@ func applyEnv(cfg *Config) error {
 	setString(&cfg.NetworkPassphrase, lookup(EnvNetworkPassphrase))
 	setString(&cfg.SourceAccount, lookup(EnvSourceAccount))
 	setString(&cfg.HTTPAddr, lookup(EnvHTTPAddr))
+	if err := setUint32FromEnv(&cfg.HTTPRateLimitPerMinute, EnvHTTPRateLimitPerMinute); err != nil {
+		return err
+	}
+	if err := setUint32FromEnv(&cfg.HTTPRateLimitBurst, EnvHTTPRateLimitBurst); err != nil {
+		return err
+	}
+	if v := lookup(EnvHTTPTrustForwardedFor); v != nil {
+		trusted, err := strconv.ParseBool(*v)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", EnvHTTPTrustForwardedFor, err)
+		}
+		cfg.HTTPTrustForwardedFor = trusted
+	}
+	setString(&cfg.HTTPTLSCert, lookup(EnvHTTPTLSCert))
+	setString(&cfg.HTTPTLSKey, lookup(EnvHTTPTLSKey))
 	if origins := lookup(EnvCORSOrigins); origins != nil {
 		cfg.CORSOrigins = nil
 		for _, origin := range strings.Split(*origins, ",") {
@@ -226,7 +261,23 @@ func applyEnv(cfg *Config) error {
 	if err := setUint32FromEnv(&cfg.WarnLedgers, EnvWarnLedgers); err != nil {
 		return err
 	}
-	return setUint32FromEnv(&cfg.CriticalLedgers, EnvCriticalLedgers)
+	if err := setUint32FromEnv(&cfg.CriticalLedgers, EnvCriticalLedgers); err != nil {
+		return err
+	}
+	return setInt64FromEnv(&cfg.BaseFee, EnvBaseFee)
+}
+
+func setInt64FromEnv(dst *int64, key string) error {
+	v := lookup(key)
+	if v == nil {
+		return nil
+	}
+	n, err := strconv.ParseInt(*v, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", key, err)
+	}
+	*dst = n
+	return nil
 }
 
 func setUint32FromEnv(dst *uint32, key string) error {
