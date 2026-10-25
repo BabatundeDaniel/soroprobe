@@ -207,8 +207,16 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}
 
+	listener, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ctx, listener)
+}
+
+// Serve runs the server on listener until ctx is canceled, then shuts it down gracefully.
+func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	srv := &http.Server{
-		Addr:              s.addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -222,12 +230,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		if s.tlsCert != "" {
 			protocol = "https"
 		}
-		s.log.Info(protocol+" api listening", "addr", s.addr)
+		s.log.Info(protocol+" api listening", "addr", listener.Addr())
 		var err error
 		if s.tlsCert == "" {
-			err = srv.ListenAndServe()
+			err = srv.Serve(listener)
 		} else {
-			err = srv.ListenAndServeTLS(s.tlsCert, s.tlsKey)
+			err = srv.ServeTLS(listener, s.tlsCert, s.tlsKey)
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -238,12 +246,17 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		s.log.Info("shutting down http api")
-		return srv.Shutdown(shutdownCtx)
+		err := srv.Shutdown(shutdownCtx)
+		_ = listener.Close()
+		return err
 	}
 }
 
