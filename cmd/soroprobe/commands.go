@@ -16,6 +16,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/soroworks/soroprobe/internal/api"
+	"github.com/soroworks/soroprobe/internal/config"
 	"github.com/soroworks/soroprobe/internal/health"
 	"github.com/soroworks/soroprobe/internal/probe"
 )
@@ -695,12 +696,18 @@ func newServeCmd(opts *options) *cobra.Command {
 	var addr string
 	var tlsCert string
 	var tlsKey string
+	var apiToken string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API",
 		Long: `Serve the HTTP API, which mirrors the CLI for use from CI systems and other
-services. The API is read-only, exactly like the CLI.`,
+services. The API is read-only, exactly like the CLI.
+
+The API is unauthenticated by default, which is fine on a private network. Set
+API_TOKEN (or --api-token) to require "Authorization: Bearer <token>" on every
+/v1 route; /healthz stays open so a liveness probe needs no credential. A
+token shorter than 16 characters is rejected at startup.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if addr != "" {
@@ -734,6 +741,7 @@ services. The API is read-only, exactly like the CLI.`,
 				TrustForwardedFor:  opts.cfg.HTTPTrustForwardedFor,
 				TLSCert:            opts.cfg.HTTPTLSCert,
 				TLSKey:             opts.cfg.HTTPTLSKey,
+				APIToken:           opts.cfg.APIToken,
 			})
 			return server.ListenAndServe(cmd.Context())
 		},
@@ -742,6 +750,8 @@ services. The API is read-only, exactly like the CLI.`,
 	cmd.Flags().StringVar(&addr, "addr", "", "listen address, overriding HTTP_ADDR")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file, overriding HTTP_TLS_CERT")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS key file, overriding HTTP_TLS_KEY")
+	cmd.Flags().StringVar(&apiToken, "api-token", "",
+		fmt.Sprintf("require this bearer token on /v1 routes, overriding %s", config.EnvAPIToken))
 	return cmd
 }
 
