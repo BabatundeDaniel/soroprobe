@@ -696,6 +696,7 @@ func newServeCmd(opts *options) *cobra.Command {
 	var addr string
 	var tlsCert string
 	var tlsKey string
+	var inspectCacheTTL time.Duration
 	var apiToken string
 
 	cmd := &cobra.Command{
@@ -712,6 +713,9 @@ token shorter than 16 characters is rejected at startup.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if addr != "" {
 				opts.cfg.HTTPAddr = addr
+			}
+			if cmd.Flags().Changed("inspect-cache-ttl") {
+				opts.cfg.InspectCacheTTL = inspectCacheTTL
 			}
 			if tlsCert != "" {
 				opts.cfg.HTTPTLSCert = tlsCert
@@ -750,6 +754,8 @@ token shorter than 16 characters is rejected at startup.`,
 	cmd.Flags().StringVar(&addr, "addr", "", "listen address, overriding HTTP_ADDR")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "TLS certificate file, overriding HTTP_TLS_CERT")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "TLS key file, overriding HTTP_TLS_KEY")
+	cmd.Flags().DurationVar(&inspectCacheTTL, "inspect-cache-ttl", 0,
+		"cache inspect results for this long; 0 disables (a few seconds suits dashboards, because TTLs change once per ledger)")
 	cmd.Flags().StringVar(&apiToken, "api-token", "",
 		fmt.Sprintf("require this bearer token on /v1 routes, overriding %s", config.EnvAPIToken))
 	return cmd
